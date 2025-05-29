@@ -93,11 +93,22 @@ func (proc *Processor) getAppStateKey(ctx context.Context, keyID []byte) (keys E
 	keys, ok = proc.keyCache[keyCacheID]
 	if !ok {
 		var keyData *store.AppStateSyncKey
+		if proc.Store == nil {
+			err = ErrKeyNotFound
+			return
+		}
+		if proc.Store.AppStateKeys == nil {
+			err = ErrKeyNotFound
+			return
+		}
 		keyData, err = proc.Store.AppStateKeys.GetAppStateSyncKey(ctx, keyID)
-		if keyData != nil {
+		if keyData != nil && keyData.Data != nil {
 			keys = expandAppStateKeys(keyData.Data)
 			proc.keyCache[keyCacheID] = keys
 		} else if err == nil {
+			if keyData != nil && keyData.Data == nil {
+				proc.Log.Debugf("App state sync key %X has nil Data field", keyID)
+			}
 			err = ErrKeyNotFound
 		}
 	}
