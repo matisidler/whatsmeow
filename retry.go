@@ -391,9 +391,135 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 	}
 
 	fmt.Printf("DEBUG GREETINGS: About to send phone request for %s to %s\n", info.ID, cli.getOwnID().ToNonAD())
+
+	// Determine which identity format to use for the phone request
+	phoneRequestTarget := cli.getOwnID().ToNonAD()
+	ownLIDForPhone := cli.getOwnLID()
+
+	// Check if we have a session with our own PN
+	hasOwnPNSession, pnSessionErr := cli.Store.ContainsSession(ctx, phoneRequestTarget.SignalAddress())
+	fmt.Printf("DEBUG GREETINGS: Session check for own PN %s: hasSession=%v, error=%v\n", phoneRequestTarget.SignalAddress(), hasOwnPNSession, pnSessionErr)
+
+	// Check if we have a session with our own LID
+	var hasOwnLIDSession bool
+	var lidSessionErr error
+	if !ownLIDForPhone.IsEmpty() {
+		hasOwnLIDSession, lidSessionErr = cli.Store.ContainsSession(ctx, ownLIDForPhone.SignalAddress())
+		fmt.Printf("DEBUG GREETINGS: Session check for own LID %s: hasSession=%v, error=%v\n", ownLIDForPhone.SignalAddress(), hasOwnLIDSession, lidSessionErr)
+	}
+
+	// Use LID if we have a session with it but not with PN
+	if !hasOwnPNSession && hasOwnLIDSession && !ownLIDForPhone.IsEmpty() {
+		phoneRequestTarget = ownLIDForPhone.ToNonAD()
+		fmt.Printf("DEBUG GREETINGS: Using LID %s for phone request instead of PN\n", phoneRequestTarget)
+	} else if !hasOwnPNSession && !hasOwnLIDSession {
+		fmt.Printf("DEBUG GREETINGS: No session found with either own PN or LID, trying fallback strategies\n")
+
+		// Fallback: Try to find any existing session for our own device by testing different formats
+		ownUserID := cli.getOwnID().User
+		ownLIDUserID := ownLIDForPhone.User
+		foundFallbackSession := false
+
+		// Try to find sessions by systematically testing different address formats
+		fmt.Printf("DEBUG GREETINGS: Searching for existing sessions with our phone number %s\n", ownUserID)
+
+		// List of different server types and device IDs to try
+		serverTypes := []string{types.DefaultUserServer, types.HiddenUserServer}
+
+		// Start with our current device IDs as they're most likely to have active sessions
+		currentPNDevice := cli.getOwnID().Device
+		currentLIDDevice := uint16(0)
+		if !ownLIDForPhone.IsEmpty() {
+			currentLIDDevice = ownLIDForPhone.Device
+		}
+
+		// Device IDs ordered by priority: current devices first, then common ones
+		deviceIDs := []uint16{currentPNDevice, currentLIDDevice, 64, 0, 1, 65, 66, 67, 68, 69, 70, 32, 33, 34, 35}
+
+		// Remove duplicates while preserving order
+		uniqueDeviceIDs := make([]uint16, 0, len(deviceIDs))
+		seen := make(map[uint16]bool)
+		for _, id := range deviceIDs {
+			if !seen[id] {
+				uniqueDeviceIDs = append(uniqueDeviceIDs, id)
+				seen[id] = true
+			}
+		}
+		deviceIDs = uniqueDeviceIDs
+
+		userIDs := []string{ownUserID}
+		if !ownLIDForPhone.IsEmpty() && ownLIDUserID != ownUserID {
+			userIDs = append(userIDs, ownLIDUserID)
+		}
+
+		// Try all combinations systematically
+		for _, userID := range userIDs {
+			for _, serverType := range serverTypes {
+				// Check device IDs in priority order (current devices first, then common ones)
+				for _, deviceID := range deviceIDs {
+					testJID := types.NewJID(userID, serverType)
+					testJID.Device = deviceID
+
+					if hasSession, err := cli.Store.ContainsSession(ctx, testJID.SignalAddress()); err == nil && hasSession {
+						fmt.Printf("DEBUG GREETINGS: Found session for %s (device ID %d), using for phone request\n", testJID.SignalAddress(), deviceID)
+
+						// Determine if this is PN or LID based on server type
+						if serverType == types.HiddenUserServer && !ownLIDForPhone.IsEmpty() {
+							phoneRequestTarget = ownLIDForPhone.ToNonAD()
+							fmt.Printf("DEBUG GREETINGS: Using LID %s for phone request based on found session\n", phoneRequestTarget)
+						} else {
+							phoneRequestTarget = cli.getOwnID().ToNonAD()
+							fmt.Printf("DEBUG GREETINGS: Using PN %s for phone request based on found session\n", phoneRequestTarget)
+						}
+						foundFallbackSession = true
+						break
+					}
+				}
+				if foundFallbackSession {
+					break
+				}
+			}
+			if foundFallbackSession {
+				break
+			}
+		}
+
+		// If no session found, proactively create one
+		if !foundFallbackSession {
+			fmt.Printf("DEBUG GREETINGS: No existing sessions found, will try with PN and proactively fetch prekeys\n")
+			phoneRequestTarget = cli.getOwnID().ToNonAD() // Default to PN
+
+			// Proactively fetch prekeys for our own device
+			go func() {
+				prekeyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+
+				// Try to fetch prekeys for our own PN first, then LID
+				targets := []types.JID{cli.getOwnID().ToNonAD()}
+				if !ownLIDForPhone.IsEmpty() {
+					targets = append(targets, ownLIDForPhone.ToNonAD())
+				}
+
+				for _, target := range targets {
+					fmt.Printf("DEBUG GREETINGS: Attempting to fetch prekeys for own device %s\n", target)
+					keys, prekeyErr := cli.fetchPreKeys(prekeyCtx, []types.JID{target})
+					if prekeyErr != nil {
+						fmt.Printf("DEBUG GREETINGS: Failed to fetch prekeys for own device %s: %v\n", target, prekeyErr)
+						continue
+					}
+
+					if bundle, exists := keys[target]; exists && bundle.bundle != nil {
+						fmt.Printf("DEBUG GREETINGS: Successfully fetched prekeys for own device %s, session should be established\n", target)
+						break
+					}
+				}
+			}()
+		}
+	}
+
 	_, err := cli.SendMessage(
 		ctx,
-		cli.getOwnID().ToNonAD(),
+		phoneRequestTarget,
 		cli.BuildUnavailableMessageRequest(info.Chat, info.Sender, info.ID),
 		SendRequestExtra{Peer: true},
 	)
@@ -416,10 +542,10 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 
 				if bundle, exists := keys[info.Sender]; exists && bundle.bundle != nil {
 					fmt.Printf("DEBUG GREETINGS: Successfully fetched prekeys for %s, retrying phone request\n", info.Sender)
-					// Retry the phone request after getting prekeys
+					// Retry the phone request after getting prekeys, using the same target that was determined to have a session
 					_, retryErr := cli.SendMessage(
 						ctxRetry,
-						cli.getOwnID().ToNonAD(),
+						phoneRequestTarget,
 						cli.BuildUnavailableMessageRequest(info.Chat, info.Sender, info.ID),
 						SendRequestExtra{Peer: true},
 					)
