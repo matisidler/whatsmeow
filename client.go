@@ -159,6 +159,10 @@ type Client struct {
 	// Should SubscribePresence return an error if no privacy token is stored for the user?
 	ErrorOnSubscribePresenceWithoutToken bool
 
+	// Enhanced retry logic for automated greeting scenarios
+	// When enabled, the client will be more aggressive about retrying messages that fail after automated greetings
+	EnableEnhancedAutomatedGreetingRetry bool
+
 	phoneLinkingCache *phoneLinkingCache
 
 	uniqueID  string
@@ -176,6 +180,10 @@ type Client struct {
 	// The library is currently embedded in mautrix-meta (https://github.com/mautrix/meta), but may be separated later.
 	MessengerConfig *MessengerConfig
 	RefreshCAT      func() error
+
+	// Track automated greeting patterns to improve retry logic
+	automatedGreetingTracker     map[types.JID]time.Time
+	automatedGreetingTrackerLock sync.RWMutex
 }
 
 type groupMetaCache struct {
@@ -246,8 +254,13 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 
 		pendingPhoneRerequests: make(map[types.MessageID]context.CancelFunc),
 
-		EnableAutoReconnect: true,
-		AutoTrustIdentity:   true,
+		EnableAutoReconnect:                true,
+		AutoTrustIdentity:                  true,
+		AutomaticMessageRerequestFromPhone: true,
+
+		EnableEnhancedAutomatedGreetingRetry: true,
+
+		automatedGreetingTracker: make(map[types.JID]time.Time),
 	}
 	cli.nodeHandlers = map[string]nodeHandler{
 		"message":      cli.handleEncryptedMessage,

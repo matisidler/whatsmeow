@@ -76,16 +76,17 @@ func (cli *Client) getMessageForRetry(ctx context.Context, receipt *events.Recei
 		if waMsg == nil {
 			return RecentMessage{}, fmt.Errorf("couldn't find message %s", messageID)
 		} else {
-			cli.Log.Debugf("Found message in GetMessageForRetry to accept retry receipt for %s/%s from %s", receipt.Chat, messageID, receipt.Sender)
+			fmt.Printf("DEBUG GREETINGS: Found message in GetMessageForRetry to accept retry receipt for %s/%s from %s\n", receipt.Chat, messageID, receipt.Sender)
 		}
 		msg = RecentMessage{wa: waMsg}
 	} else {
-		cli.Log.Debugf("Found message in local cache to accept retry receipt for %s/%s from %s", receipt.Chat, messageID, receipt.Sender)
+		fmt.Printf("DEBUG GREETINGS: Found message in local cache to accept retry receipt for %s/%s from %s\n", receipt.Chat, messageID, receipt.Sender)
 	}
 	return msg, nil
 }
 
 const recreateSessionTimeout = 1 * time.Hour
+const recreateSessionTimeoutAggressive = 5 * time.Minute // Shorter timeout for automated greeting scenarios
 
 func (cli *Client) shouldRecreateSession(ctx context.Context, retryCount int, jid types.JID) (reason string, recreate bool) {
 	cli.sessionRecreateHistoryLock.Lock()
@@ -98,9 +99,19 @@ func (cli *Client) shouldRecreateSession(ctx context.Context, retryCount int, ji
 	} else if retryCount < 2 {
 		return "", false
 	}
+
+	// Use shorter timeout for bot accounts or potential automated greeting scenarios
+	timeout := recreateSessionTimeout
+	if jid.IsBot() {
+		timeout = recreateSessionTimeoutAggressive
+	}
+
 	prevTime, ok := cli.sessionRecreateHistory[jid]
-	if !ok || prevTime.Add(recreateSessionTimeout).Before(time.Now()) {
+	if !ok || prevTime.Add(timeout).Before(time.Now()) {
 		cli.sessionRecreateHistory[jid] = time.Now()
+		if timeout == recreateSessionTimeoutAggressive {
+			return fmt.Sprintf("retry count > 1 and over %v since last recreation (aggressive mode for bot/automated)", timeout), true
+		}
 		return "retry count > 1 and over an hour since last recreation", true
 	}
 	return "", false
@@ -145,7 +156,7 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 	internalCounter := cli.incomingRetryRequestCounter[retryKey]
 	cli.incomingRetryRequestCounterLock.Unlock()
 	if internalCounter >= 10 {
-		cli.Log.Warnf("Dropping retry request from %s for %s: internal retry counter is %d", messageID, receipt.Sender, internalCounter)
+		fmt.Printf("DEBUG GREETINGS: Dropping retry request from %s for %s: internal retry counter is %d\n", messageID, receipt.Sender, internalCounter)
 		return nil
 	}
 
@@ -156,7 +167,7 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 		senderKeyName := protocol.NewSenderKeyName(receipt.Chat.String(), cli.getOwnLID().SignalAddress())
 		signalSKDMessage, err := builder.Create(ctx, senderKeyName)
 		if err != nil {
-			cli.Log.Warnf("Failed to create sender key distribution message to include in retry of %s in %s to %s: %v", messageID, receipt.Chat, receipt.Sender, err)
+			fmt.Printf("DEBUG GREETINGS: Failed to create sender key distribution message to include in retry of %s in %s to %s: %v\n", messageID, receipt.Chat, receipt.Sender, err)
 		}
 		if msg.wa != nil {
 			msg.wa.SenderKeyDistributionMessage = &waE2E.SenderKeyDistributionMessage{
@@ -186,7 +197,7 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 
 	// TODO pre-retry callback for fb
 	if cli.PreRetryCallback != nil && !cli.PreRetryCallback(receipt, messageID, retryCount, msg.wa) {
-		cli.Log.Debugf("Cancelled retry receipt in PreRetryCallback")
+		fmt.Printf("DEBUG GREETINGS: Cancelled retry receipt in PreRetryCallback\n")
 		return nil
 	}
 
@@ -213,7 +224,7 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 			return fmt.Errorf("failed to read prekey bundle in retry receipt: %w", err)
 		}
 	} else if reason, recreate := cli.shouldRecreateSession(ctx, retryCount, receipt.Sender); recreate {
-		cli.Log.Debugf("Fetching prekeys for %s for handling retry receipt with no prekey bundle because %s", receipt.Sender, reason)
+		fmt.Printf("DEBUG GREETINGS: Fetching prekeys for %s for handling retry receipt with no prekey bundle because %s\n", receipt.Sender, reason)
 		var keys map[types.JID]preKeyResp
 		keys, err = cli.fetchPreKeys(ctx, []types.JID{receipt.Sender})
 		if err != nil {
@@ -246,7 +257,7 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 		if receipt.Sender.Server == types.DefaultUserServer {
 			lidForPN, err := cli.Store.LIDs.GetLIDForPN(ctx, receipt.Sender)
 			if err != nil {
-				cli.Log.Warnf("Failed to get LID for %s: %v", receipt.Sender, err)
+				fmt.Printf("DEBUG GREETINGS: Failed to get LID for %s: %v\n", receipt.Sender, err)
 			} else if !lidForPN.IsEmpty() {
 				cli.migrateSessionStore(ctx, receipt.Sender, lidForPN)
 				encryptionIdentity = lidForPN
@@ -304,7 +315,7 @@ func (cli *Client) handleRetryReceipt(ctx context.Context, receipt *events.Recei
 	if err != nil {
 		return fmt.Errorf("failed to send retry message: %w", err)
 	}
-	cli.Log.Debugf("Sent retry #%d for %s/%s to %s", retryCount, receipt.Chat, messageID, receipt.Sender)
+	fmt.Printf("DEBUG GREETINGS: Sent retry #%d for %s/%s to %s\n", retryCount, receipt.Chat, messageID, receipt.Sender)
 	return nil
 }
 
@@ -347,7 +358,7 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 	select {
 	case <-time.After(RequestFromPhoneDelay):
 	case <-ctx.Done():
-		cli.Log.Debugf("Cancelled delayed request for message %s from phone", info.ID)
+		fmt.Printf("DEBUG GREETINGS: Cancelled delayed request for message %s from phone\n", info.ID)
 		return
 	}
 	_, err := cli.SendMessage(
@@ -357,9 +368,9 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 		SendRequestExtra{Peer: true},
 	)
 	if err != nil {
-		cli.Log.Warnf("Failed to send request for unavailable message %s to phone: %v", info.ID, err)
+		fmt.Printf("DEBUG GREETINGS: Failed to send request for unavailable message %s to phone: %v\n", info.ID, err)
 	} else {
-		cli.Log.Debugf("Requested message %s from phone", info.ID)
+		fmt.Printf("DEBUG GREETINGS: Requested message %s from phone\n", info.ID)
 	}
 	return
 }
@@ -390,12 +401,28 @@ func (cli *Client) sendRetryReceipt(ctx context.Context, node *waBinary.Node, in
 		cli.messageRetries[id] = retryCount
 	}
 	cli.messageRetriesLock.Unlock()
-	if retryCount >= 5 {
-		cli.Log.Warnf("Not sending any more retry receipts for %s", id)
+
+	// Increase retry limit for potential automated greeting scenarios
+	maxRetries := 5
+	// If this looks like it might be after an automated greeting (short time window, specific sender patterns)
+	if cli.EnableEnhancedAutomatedGreetingRetry && cli.isLikelyPostAutomatedGreeting(info) {
+		maxRetries = 8 // Allow more retries for these cases
+		fmt.Printf("DEBUG GREETINGS: Detected potential post-automated-greeting message from %s, extending retry limit to %d\n", info.SourceString(), maxRetries)
+	}
+
+	if retryCount >= maxRetries {
+		cli.Log.Warnf("Not sending any more retry receipts for %s (reached limit of %d)", id, maxRetries)
 		return
 	}
 	if retryCount == 1 {
 		go cli.delayedRequestMessageFromPhone(info)
+	}
+
+	// For automated greeting scenarios, be more aggressive about session recreation
+	var shouldForceSessionRecreation bool
+	if cli.EnableEnhancedAutomatedGreetingRetry && cli.isLikelyPostAutomatedGreeting(info) && retryCount >= 2 {
+		shouldForceSessionRecreation = true
+		fmt.Printf("DEBUG GREETINGS: Forcing session recreation for potential post-automated-greeting message from %s\n", info.SourceString())
 	}
 
 	var registrationIDBytes [4]byte
@@ -424,7 +451,7 @@ func (cli *Client) sendRetryReceipt(ctx context.Context, node *waBinary.Node, in
 			{Tag: "registration", Content: registrationIDBytes[:]},
 		},
 	}
-	if retryCount > 1 || forceIncludeIdentity {
+	if retryCount > 1 || forceIncludeIdentity || shouldForceSessionRecreation {
 		if key, err := cli.Store.PreKeys.GenOnePreKey(ctx); err != nil {
 			cli.Log.Errorf("Failed to get prekey for retry receipt: %v", err)
 		} else if deviceIdentity, err := proto.Marshal(cli.Store.Account); err != nil {
@@ -446,5 +473,59 @@ func (cli *Client) sendRetryReceipt(ctx context.Context, node *waBinary.Node, in
 	err := cli.sendNode(payload)
 	if err != nil {
 		cli.Log.Errorf("Failed to send retry receipt for %s: %v", id, err)
+	}
+}
+
+// isLikelyPostAutomatedGreeting detects if a message might be following an automated greeting
+func (cli *Client) isLikelyPostAutomatedGreeting(info *types.MessageInfo) bool {
+	// Check if this is from a business account or has characteristics of automated greeting follow-up
+	if info.Sender.IsBot() {
+		return true
+	}
+
+	// Check our automated greeting tracker
+	cli.automatedGreetingTrackerLock.RLock()
+	lastAutomatedTime, hasAutomated := cli.automatedGreetingTracker[info.Sender]
+	cli.automatedGreetingTrackerLock.RUnlock()
+
+	if hasAutomated {
+		// If we've seen an automated greeting from this sender recently (within 2 minutes)
+		if time.Since(lastAutomatedTime) < 2*time.Minute {
+			fmt.Printf("DEBUG GREETINGS: Detected message from %s within 2 minutes of automated greeting\n", info.SourceString())
+			return true
+		}
+	}
+
+	// Check if we've seen recent automated-looking messages from this sender
+	cli.recentMessagesLock.RLock()
+	defer cli.recentMessagesLock.RUnlock()
+
+	// Look for patterns that suggest this might be after an automated greeting
+	// This is a heuristic - you might want to adjust based on your specific use case
+	now := time.Now()
+	for _, key := range cli.recentMessagesList {
+		if key.To == info.Sender && now.Sub(info.Timestamp) < 5*time.Second {
+			// Recent message from same sender within 30 seconds - could be automated greeting scenario
+			return true
+		}
+	}
+
+	return false
+}
+
+// trackAutomatedGreeting should be called when we detect an automated greeting
+func (cli *Client) trackAutomatedGreeting(sender types.JID) {
+	cli.automatedGreetingTrackerLock.Lock()
+	defer cli.automatedGreetingTrackerLock.Unlock()
+
+	cli.automatedGreetingTracker[sender] = time.Now()
+	fmt.Printf("DEBUG GREETINGS: Tracked automated greeting from %s\n", sender)
+
+	// Clean up old entries (older than 10 minutes) to prevent memory leaks
+	cutoff := time.Now().Add(-10 * time.Minute)
+	for jid, timestamp := range cli.automatedGreetingTracker {
+		if timestamp.Before(cutoff) {
+			delete(cli.automatedGreetingTracker, jid)
+		}
 	}
 }

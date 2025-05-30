@@ -175,6 +175,13 @@ func (proc *Processor) decodeMutations(ctx context.Context, mutations []*waServe
 }
 
 func (proc *Processor) storeMACs(ctx context.Context, name WAPatchName, currentState HashState, out *patchOutput) {
+	if proc == nil {
+		return
+	}
+	if proc.Store == nil || proc.Store.AppState == nil {
+		proc.Log.Warnf("Cannot store MACs: Store or AppState is nil")
+		return
+	}
 	err := proc.Store.AppState.PutAppStateVersion(ctx, string(name), currentState.Version, currentState.Hash)
 	if err != nil {
 		proc.Log.Errorf("Failed to update app state version in the database: %v", err)
@@ -276,6 +283,10 @@ func (proc *Processor) DecodePatches(ctx context.Context, list *PatchList, initi
 				}
 			}
 			// Previous value not found in current patch, look in the database
+			if proc.Store == nil || proc.Store.AppState == nil {
+				proc.Log.Warnf("Cannot get mutation MAC from database: Store or AppState is nil")
+				return nil, nil
+			}
 			return proc.Store.AppState.GetAppStateMutationMAC(ctx, string(list.Name), indexMAC)
 		})
 		if len(warn) > 0 {

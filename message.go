@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -344,8 +345,30 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 		} else if err != nil {
 			cli.Log.Warnf("Error decrypting message from %s: %v", info.SourceString(), err)
 			isUnavailable := encType == "skmsg" && !containsDirectMsg && errors.Is(err, signalerror.ErrNoSenderKeyForUser)
+
+			// Check if this might be a session-related issue that we can fix
+			shouldForceRetry := false
+			if errors.Is(err, signalerror.ErrUntrustedIdentity) {
+				shouldForceRetry = true
+				fmt.Printf("DEBUG GREETINGS: Detected untrusted identity error for message %s from %s, will force retry with session recreation\n", info.ID, info.SourceString())
+			}
+
+			// For automated greeting scenarios, be more aggressive about clearing sessions
+			if cli.EnableEnhancedAutomatedGreetingRetry && (info.Sender.IsBot() || cli.isLikelyPostAutomatedGreeting(info)) {
+				fmt.Printf("DEBUG GREETINGS: Clearing session for %s due to automated greeting scenario\n", senderEncryptionJID)
+				go func() {
+					ctx := context.WithoutCancel(ctx)
+					if sessionErr := cli.Store.Sessions.DeleteSession(ctx, senderEncryptionJID.SignalAddress().String()); sessionErr != nil {
+						fmt.Printf("DEBUG GREETINGS: Failed to clear session for %s: %v\n", senderEncryptionJID, sessionErr)
+					} else {
+						fmt.Printf("DEBUG GREETINGS: Successfully cleared session for %s\n", senderEncryptionJID)
+					}
+				}()
+				shouldForceRetry = true
+			}
+
 			if encType != "msmsg" {
-				go cli.sendRetryReceipt(context.WithoutCancel(ctx), node, info, isUnavailable)
+				go cli.sendRetryReceipt(context.WithoutCancel(ctx), node, info, isUnavailable || shouldForceRetry)
 			}
 			cli.dispatchEvent(&events.UndecryptableMessage{
 				Info:            *info,
@@ -635,6 +658,11 @@ func (cli *Client) handleHistorySyncNotification(ctx context.Context, notif *waE
 }
 
 func (cli *Client) handleAppStateSyncKeyShare(ctx context.Context, keys *waE2E.AppStateSyncKeyShare) {
+	if cli.Store == nil || cli.Store.AppStateKeys == nil {
+		cli.Log.Warnf("Cannot store app state sync keys: Store or AppStateKeys is nil")
+		return
+	}
+
 	onlyResyncIfNotSynced := true
 
 	cli.Log.Debugf("Got %d new app state keys", len(keys.GetKeys()))
@@ -818,8 +846,50 @@ func (cli *Client) storeHistoricalMessageSecrets(ctx context.Context, conversati
 
 func (cli *Client) handleDecryptedMessage(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message, retryCount int) {
 	cli.processProtocolParts(ctx, info, msg)
+
+	// Check if this looks like an automated greeting and track it
+	if cli.EnableEnhancedAutomatedGreetingRetry && cli.looksLikeAutomatedGreeting(msg) {
+		fmt.Printf("DEBUG GREETINGS: Detected automated greeting from %s, tracking it\n", info.Sender)
+		cli.trackAutomatedGreeting(info.Sender)
+	}
+
 	evt := &events.Message{Info: *info, RawMessage: msg, RetryCount: retryCount}
 	cli.dispatchEvent(evt.UnwrapRaw())
+}
+
+// looksLikeAutomatedGreeting analyzes a message to determine if it's likely an automated greeting
+func (cli *Client) looksLikeAutomatedGreeting(msg *waE2E.Message) bool {
+	// Check for common automated greeting patterns
+	if msg.GetConversation() != "" {
+		text := strings.ToLower(msg.GetConversation())
+		fmt.Printf("DEBUG GREETINGS: Analyzing text message: '%s'\n", text)
+		// Common automated greeting patterns (you can extend this list)
+		automatedPatterns := []string{
+			"hello", "hi", "welcome", "thanks for contacting", "thank you for contacting",
+			"how can i help", "how may i help", "automated", "bot", "assistant",
+			"¡hola", "¿cómo podemos ayudarte", "gracias por contactar",
+		}
+		for _, pattern := range automatedPatterns {
+			if strings.Contains(text, pattern) {
+				fmt.Printf("DEBUG GREETINGS: Found automated greeting pattern '%s' in text: '%s'\n", pattern, text)
+				return true
+			}
+		}
+	}
+
+	// Check for template messages (often used for automated greetings)
+	if msg.GetTemplateMessage() != nil {
+		fmt.Printf("DEBUG GREETINGS: Detected template message (likely automated greeting)\n")
+		return true
+	}
+
+	// Check for interactive messages (often automated)
+	if msg.GetInteractiveMessage() != nil {
+		fmt.Printf("DEBUG GREETINGS: Detected interactive message (likely automated greeting)\n")
+		return true
+	}
+
+	return false
 }
 
 func (cli *Client) sendProtocolMessageReceipt(id types.MessageID, msgType types.ReceiptType) {

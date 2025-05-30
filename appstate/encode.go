@@ -247,6 +247,9 @@ func BuildStar(target, sender types.JID, messageID types.MessageID, fromMe, star
 }
 
 func (proc *Processor) EncodePatch(ctx context.Context, keyID []byte, state HashState, patchInfo PatchInfo) ([]byte, error) {
+	if proc == nil {
+		return nil, fmt.Errorf("processor is nil")
+	}
 	keys, err := proc.getAppStateKey(ctx, keyID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get app state key details with key ID %x: %w", keyID, err)
@@ -296,6 +299,10 @@ func (proc *Processor) EncodePatch(ctx context.Context, keyID []byte, state Hash
 	}
 
 	warn, err := state.updateHash(mutations, func(indexMAC []byte, _ int) ([]byte, error) {
+		if proc.Store == nil || proc.Store.AppState == nil {
+			proc.Log.Warnf("Cannot get mutation MAC from database: Store or AppState is nil")
+			return nil, nil
+		}
 		return proc.Store.AppState.GetAppStateMutationMAC(ctx, string(patchInfo.Type), indexMAC)
 	})
 	if len(warn) > 0 {

@@ -28,6 +28,12 @@ func (cli *Client) FetchAppState(ctx context.Context, name appstate.WAPatchName,
 	if cli == nil {
 		return ErrClientIsNil
 	}
+	if cli.Store == nil {
+		return fmt.Errorf("client store is nil")
+	}
+	if cli.Store.AppState == nil {
+		return fmt.Errorf("client store AppState is nil")
+	}
 	cli.appStateSyncLock.Lock()
 	defer cli.appStateSyncLock.Unlock()
 	if fullSync {
@@ -353,6 +359,15 @@ func (cli *Client) requestAppStateKeys(ctx context.Context, rawKeyIDs [][]byte) 
 func (cli *Client) SendAppState(ctx context.Context, patch appstate.PatchInfo) error {
 	if cli == nil {
 		return ErrClientIsNil
+	}
+	if cli.Store == nil {
+		return fmt.Errorf("client store is nil")
+	}
+	if cli.Store.AppState == nil {
+		return fmt.Errorf("client store AppState is nil")
+	}
+	if cli.Store.AppStateKeys == nil {
+		return fmt.Errorf("client store AppStateKeys is nil")
 	}
 	version, hash, err := cli.Store.AppState.GetAppStateVersion(ctx, string(patch.Type))
 	if err != nil {
