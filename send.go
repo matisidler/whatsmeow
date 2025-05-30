@@ -763,9 +763,11 @@ func (cli *Client) sendPeerMessage(
 	message *waE2E.Message,
 	timings *MessageDebugTimings,
 ) ([]byte, error) {
+	fmt.Printf("DEBUG GREETINGS: sendPeerMessage called with to=%s, id=%s\n", to, id)
 	node, err := cli.preparePeerMessageNode(ctx, to, id, message, timings)
 	if err != nil {
-		return nil, err
+		fmt.Printf("DEBUG GREETINGS: sendPeerMessage encryption failed for %s: %v\n", to, err)
+		return nil, fmt.Errorf("failed to encrypt peer message for %s: %v", to, err)
 	}
 	start := time.Now()
 	data, err := cli.sendNodeAndGetData(*node)
@@ -773,6 +775,7 @@ func (cli *Client) sendPeerMessage(
 	if err != nil {
 		return nil, fmt.Errorf("failed to send message node: %w", err)
 	}
+	fmt.Printf("DEBUG GREETINGS: sendPeerMessage successful for %s\n", to)
 	return data, nil
 }
 
@@ -967,6 +970,7 @@ func (cli *Client) preparePeerMessageNode(
 	message *waE2E.Message,
 	timings *MessageDebugTimings,
 ) (*waBinary.Node, error) {
+	fmt.Printf("DEBUG GREETINGS: preparePeerMessageNode called with to=%s, id=%s\n", to, id)
 	attrs := waBinary.Attrs{
 		"id":       id,
 		"type":     "text",
@@ -987,12 +991,14 @@ func (cli *Client) preparePeerMessageNode(
 	encrypted, isPreKey, err := cli.encryptMessageForDevice(ctx, plaintext, to, nil, nil)
 	timings.PeerEncrypt = time.Since(start)
 	if err != nil {
+		fmt.Printf("DEBUG GREETINGS: preparePeerMessageNode encryption failed for %s: %v\n", to, err)
 		return nil, fmt.Errorf("failed to encrypt peer message for %s: %v", to, err)
 	}
 	content := []waBinary.Node{*encrypted}
 	if isPreKey && cli.MessengerConfig == nil {
 		content = append(content, cli.makeDeviceIdentityNode())
 	}
+	fmt.Printf("DEBUG GREETINGS: preparePeerMessageNode successful for %s\n", to)
 	return &waBinary.Node{
 		Tag:     "message",
 		Attrs:   attrs,
@@ -1255,6 +1261,7 @@ func (cli *Client) encryptMessageForDevice(
 	bundle *prekey.Bundle,
 	extraAttrs waBinary.Attrs,
 ) (*waBinary.Node, bool, error) {
+	fmt.Printf("DEBUG GREETINGS: encryptMessageForDevice called with to=%s, bundle=%v\n", to, bundle != nil)
 	builder := session.NewBuilderFromSignal(cli.Store, to.SignalAddress(), pbSerializer)
 	if bundle != nil {
 		cli.Log.Debugf("Processing prekey bundle for %s", to)
@@ -1271,13 +1278,18 @@ func (cli *Client) encryptMessageForDevice(
 			return nil, false, fmt.Errorf("failed to process prekey bundle: %w", err)
 		}
 	} else if contains, err := cli.Store.ContainsSession(ctx, to.SignalAddress()); err != nil {
+		fmt.Printf("DEBUG GREETINGS: Session check error for %s: %v\n", to.SignalAddress(), err)
 		return nil, false, err
 	} else if !contains {
+		fmt.Printf("DEBUG GREETINGS: No session found for %s (address: %s)\n", to, to.SignalAddress())
 		return nil, false, ErrNoSession
+	} else {
+		fmt.Printf("DEBUG GREETINGS: Session exists for %s (address: %s)\n", to, to.SignalAddress())
 	}
 	cipher := session.NewCipher(builder, to.SignalAddress())
 	ciphertext, err := cipher.Encrypt(ctx, padMessage(plaintext))
 	if err != nil {
+		fmt.Printf("DEBUG GREETINGS: Cipher encryption failed for %s: %v\n", to, err)
 		return nil, false, fmt.Errorf("cipher encryption failed: %w", err)
 	}
 
@@ -1291,6 +1303,7 @@ func (cli *Client) encryptMessageForDevice(
 	copyAttrs(extraAttrs, encAttrs)
 
 	includeDeviceIdentity := encAttrs["type"] == "pkmsg" && cli.MessengerConfig == nil
+	fmt.Printf("DEBUG GREETINGS: Successfully encrypted message for %s\n", to)
 	return &waBinary.Node{
 		Tag:     "enc",
 		Attrs:   encAttrs,

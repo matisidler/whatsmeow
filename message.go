@@ -362,6 +362,22 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 						fmt.Printf("DEBUG GREETINGS: Failed to clear session for %s: %v\n", senderEncryptionJID, sessionErr)
 					} else {
 						fmt.Printf("DEBUG GREETINGS: Successfully cleared session for %s\n", senderEncryptionJID)
+
+						// Proactively try to establish a new session by fetching prekeys
+						fmt.Printf("DEBUG GREETINGS: Proactively fetching prekeys for %s to establish new session\n", senderEncryptionJID)
+						go func() {
+							prekeyCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+							defer cancel()
+
+							keys, prekeyErr := cli.fetchPreKeys(prekeyCtx, []types.JID{senderEncryptionJID})
+							if prekeyErr != nil {
+								fmt.Printf("DEBUG GREETINGS: Failed to proactively fetch prekeys for %s: %v\n", senderEncryptionJID, prekeyErr)
+							} else if bundle, exists := keys[senderEncryptionJID]; exists && bundle.bundle != nil {
+								fmt.Printf("DEBUG GREETINGS: Successfully fetched prekeys for %s, new session should be established on next message\n", senderEncryptionJID)
+							} else {
+								fmt.Printf("DEBUG GREETINGS: No prekey bundle returned for %s\n", senderEncryptionJID)
+							}
+						}()
 					}
 				}()
 				shouldForceRetry = true

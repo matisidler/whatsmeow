@@ -11,7 +11,9 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.mau.fi/libsignal/ecc"
@@ -339,10 +341,36 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 	if !cli.AutomaticMessageRerequestFromPhone || cli.MessengerConfig != nil {
 		return
 	}
+
+	// Add diagnostic information about session state
+	fmt.Printf("DEBUG GREETINGS: Starting delayed phone request for message %s from %s\n", info.ID, info.Sender)
+
+	// Check session state before making the request
+	ctx := context.Background()
+	hasSession, sessionErr := cli.Store.ContainsSession(ctx, info.Sender.SignalAddress())
+	fmt.Printf("DEBUG GREETINGS: Session check for %s: hasSession=%v, error=%v\n", info.Sender.SignalAddress(), hasSession, sessionErr)
+
+	// Also check with different JID formats
+	ownID := cli.getOwnID()
+	ownLID := cli.getOwnLID()
+	fmt.Printf("DEBUG GREETINGS: Own ID: %s, Own LID: %s\n", ownID, ownLID)
+
+	// Check if there's a LID mapping
+	if lid, err := cli.Store.LIDs.GetLIDForPN(ctx, info.Sender); err != nil {
+		fmt.Printf("DEBUG GREETINGS: Failed to get LID for %s: %v\n", info.Sender, err)
+	} else if !lid.IsEmpty() {
+		fmt.Printf("DEBUG GREETINGS: Found LID %s for PN %s\n", lid, info.Sender)
+		hasLIDSession, lidSessionErr := cli.Store.ContainsSession(ctx, lid.SignalAddress())
+		fmt.Printf("DEBUG GREETINGS: Session check for LID %s: hasSession=%v, error=%v\n", lid.SignalAddress(), hasLIDSession, lidSessionErr)
+	} else {
+		fmt.Printf("DEBUG GREETINGS: No LID found for %s\n", info.Sender)
+	}
+
 	cli.pendingPhoneRerequestsLock.Lock()
 	_, alreadyRequesting := cli.pendingPhoneRerequests[info.ID]
 	if alreadyRequesting {
 		cli.pendingPhoneRerequestsLock.Unlock()
+		fmt.Printf("DEBUG GREETINGS: Already requesting message %s from phone\n", info.ID)
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -361,6 +389,8 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 		fmt.Printf("DEBUG GREETINGS: Cancelled delayed request for message %s from phone\n", info.ID)
 		return
 	}
+
+	fmt.Printf("DEBUG GREETINGS: About to send phone request for %s to %s\n", info.ID, cli.getOwnID().ToNonAD())
 	_, err := cli.SendMessage(
 		ctx,
 		cli.getOwnID().ToNonAD(),
@@ -369,6 +399,38 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 	)
 	if err != nil {
 		fmt.Printf("DEBUG GREETINGS: Failed to send request for unavailable message %s to phone: %v\n", info.ID, err)
+
+		// If the error is due to no signal session, try to establish one
+		if errors.Is(err, ErrNoSession) || strings.Contains(err.Error(), "no signal session established") {
+			fmt.Printf("DEBUG GREETINGS: No signal session for phone request, attempting to fetch prekeys for %s\n", info.Sender)
+			go func() {
+				ctxRetry, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+
+				// Try to fetch prekeys and establish session
+				keys, prekeyErr := cli.fetchPreKeys(ctxRetry, []types.JID{info.Sender})
+				if prekeyErr != nil {
+					fmt.Printf("DEBUG GREETINGS: Failed to fetch prekeys for %s: %v\n", info.Sender, prekeyErr)
+					return
+				}
+
+				if bundle, exists := keys[info.Sender]; exists && bundle.bundle != nil {
+					fmt.Printf("DEBUG GREETINGS: Successfully fetched prekeys for %s, retrying phone request\n", info.Sender)
+					// Retry the phone request after getting prekeys
+					_, retryErr := cli.SendMessage(
+						ctxRetry,
+						cli.getOwnID().ToNonAD(),
+						cli.BuildUnavailableMessageRequest(info.Chat, info.Sender, info.ID),
+						SendRequestExtra{Peer: true},
+					)
+					if retryErr != nil {
+						fmt.Printf("DEBUG GREETINGS: Retry phone request also failed for %s: %v\n", info.ID, retryErr)
+					} else {
+						fmt.Printf("DEBUG GREETINGS: Successfully sent retry phone request for %s\n", info.ID)
+					}
+				}
+			}()
+		}
 	} else {
 		fmt.Printf("DEBUG GREETINGS: Requested message %s from phone\n", info.ID)
 	}
