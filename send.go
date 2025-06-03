@@ -1288,6 +1288,7 @@ func (cli *Client) encryptMessageForDevice(
 		fmt.Printf("DEBUG GREETINGS: Session check error for %s: %v\n", to.SignalAddress(), err)
 		return nil, false, err
 	} else if !contains {
+		fmt.Printf("DEBUG GREETINGS: No session found for %s (address: %s)\n", to, to.SignalAddress())
 		return nil, false, fmt.Errorf("%w with %s", ErrNoSession, to.SignalAddress().String())
 	}
 	cipher := session.NewCipher(builder, to.SignalAddress())
