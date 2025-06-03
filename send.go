@@ -590,7 +590,7 @@ func ParseDisappearingTimerString(val string) (time.Duration, bool) {
 // In groups, the server will echo the change as a notification, so it'll show up as a *events.GroupInfo update.
 func (cli *Client) SetDisappearingTimer(chat types.JID, timer time.Duration) (err error) {
 	switch chat.Server {
-	case types.DefaultUserServer:
+	case types.DefaultUserServer, types.HiddenUserServer:
 		_, err = cli.SendMessage(context.TODO(), chat, &waE2E.Message{
 			ProtocolMessage: &waE2E.ProtocolMessage{
 				Type:                waE2E.ProtocolMessage_EPHEMERAL_SETTING.Enum(),
@@ -987,8 +987,15 @@ func (cli *Client) preparePeerMessageNode(
 		err = fmt.Errorf("failed to marshal message: %w", err)
 		return nil, err
 	}
+	encryptionIdentity := to
+	if to.Server == types.DefaultUserServer {
+		encryptionIdentity, err = cli.Store.LIDs.GetLIDForPN(ctx, to)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get LID for PN %s: %w", to, err)
+		}
+	}
 	start = time.Now()
-	encrypted, isPreKey, err := cli.encryptMessageForDevice(ctx, plaintext, to, nil, nil)
+	encrypted, isPreKey, err := cli.encryptMessageForDevice(ctx, plaintext, encryptionIdentity, nil, nil)
 	timings.PeerEncrypt = time.Since(start)
 	if err != nil {
 		fmt.Printf("DEBUG GREETINGS: preparePeerMessageNode encryption failed for %s: %v\n", to, err)
@@ -1281,10 +1288,7 @@ func (cli *Client) encryptMessageForDevice(
 		fmt.Printf("DEBUG GREETINGS: Session check error for %s: %v\n", to.SignalAddress(), err)
 		return nil, false, err
 	} else if !contains {
-		fmt.Printf("DEBUG GREETINGS: No session found for %s (address: %s)\n", to, to.SignalAddress())
-		return nil, false, ErrNoSession
-	} else {
-		fmt.Printf("DEBUG GREETINGS: Session exists for %s (address: %s)\n", to, to.SignalAddress())
+		return nil, false, fmt.Errorf("%w with %s", ErrNoSession, to.SignalAddress().String())
 	}
 	cipher := session.NewCipher(builder, to.SignalAddress())
 	ciphertext, err := cipher.Encrypt(ctx, padMessage(plaintext))
