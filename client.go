@@ -164,6 +164,9 @@ type Client struct {
 	// Enhanced retry logic for automated greeting scenarios
 	// When enabled, the client will be more aggressive about retrying messages that fail after automated greetings
 	EnableEnhancedAutomatedGreetingRetry bool
+	SendReportingTokens                  bool
+
+	BackgroundEventCtx context.Context
 
 	phoneLinkingCache *phoneLinkingCache
 
@@ -264,6 +267,10 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		EnableEnhancedAutomatedGreetingRetry: true,
 
 		automatedGreetingTracker: make(map[types.JID]time.Time),
+		EnableAutoReconnect:      true,
+		AutoTrustIdentity:        true,
+
+		BackgroundEventCtx: context.Background(),
 	}
 	cli.nodeHandlers = map[string]nodeHandler{
 		"message":      cli.handleEncryptedMessage,

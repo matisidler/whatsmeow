@@ -40,7 +40,7 @@ import (
 var pbSerializer = store.SignalProtobufSerializer
 
 func (cli *Client) handleEncryptedMessage(node *waBinary.Node) {
-	ctx := context.TODO()
+	ctx := cli.BackgroundEventCtx
 	info, err := cli.parseMessageInfo(node)
 	if err != nil {
 		cli.Log.Warnf("Failed to parse message: %v", err)
@@ -56,7 +56,7 @@ func (cli *Client) handleEncryptedMessage(node *waBinary.Node) {
 		if len(info.PushName) > 0 && info.PushName != "-" {
 			go cli.updatePushName(context.WithoutCancel(ctx), info.Sender, info, info.PushName)
 		}
-		defer cli.maybeDeferredAck(node)()
+		defer cli.maybeDeferredAck(ctx, node)()
 		if info.Sender.Server == types.NewsletterServer {
 			cli.handlePlaintextMessage(ctx, info, node)
 		} else {
@@ -343,7 +343,10 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 			cli.Log.Debugf("Ignoring message %s from %s: %v", info.ID, info.SourceString(), err)
 			return
 		} else if err != nil {
-			cli.Log.Warnf("Error decrypting message from %s: %v", info.SourceString(), err)
+			cli.Log.Warnf("Error decrypting message %s from %s: %v", info.ID, info.SourceString(), err)
+			if ctx.Err() != nil {
+				return
+			}
 			isUnavailable := encType == "skmsg" && !containsDirectMsg && errors.Is(err, signalerror.ErrNoSenderKeyForUser)
 
 			// Check if this might be a session-related issue that we can fix
@@ -424,7 +427,7 @@ func (cli *Client) decryptMessages(ctx context.Context, info *types.MessageInfo,
 					Msg("Deleted event plaintext from buffer")
 			}
 
-			if time.Since(cli.lastDecryptedBufferClear) > 12*time.Hour {
+			if time.Since(cli.lastDecryptedBufferClear) > 12*time.Hour && ctx.Err() == nil {
 				cli.lastDecryptedBufferClear = time.Now()
 				go func() {
 					err := cli.Store.EventBuffer.DeleteOldBufferedHashes(context.WithoutCancel(ctx))
@@ -644,7 +647,7 @@ func (cli *Client) handleHistorySyncNotificationLoop() {
 			go cli.handleHistorySyncNotificationLoop()
 		}
 	}()
-	ctx := context.TODO()
+	ctx := cli.BackgroundEventCtx
 	for notif := range cli.historySyncNotifications {
 		blob, err := cli.DownloadHistorySync(ctx, notif, false)
 		if err != nil {
