@@ -267,8 +267,6 @@ func NewClient(deviceStore *store.Device, log waLog.Logger) *Client {
 		EnableEnhancedAutomatedGreetingRetry: true,
 
 		automatedGreetingTracker: make(map[types.JID]time.Time),
-		EnableAutoReconnect:      true,
-		AutoTrustIdentity:        true,
 
 		BackgroundEventCtx: context.Background(),
 	}
