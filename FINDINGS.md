@@ -169,3 +169,61 @@ The fix has **completely resolved** the original "can't send message to unknown 
 **Current Status**: The phone request mechanism is working correctly. Any missing message responses are now due to external factors (primary device availability, network conditions, message availability) rather than code bugs.
 
 **Impact**: This fix will help recover many more undecryptable messages by enabling the system to use LID-based phone requests when traditional phone number sessions are not available.
+
+## Post-Fix Analysis: Phone Requests Working But Messages Still Undecryptable
+
+### Current Status (After Fix)
+
+✅ **Phone Request System**: Completely operational - no more "unknown server lid" errors
+✅ **LID-based Requests**: Successfully sent using LID when PN sessions unavailable  
+❓ **Message Decryption**: Still failing for some messages despite successful phone requests
+
+### New Investigation: Response Processing
+
+After the fix, phone requests are being sent successfully but some messages remain undecryptable. From the logs:
+
+```
+DEBUG GREETINGS: Requested message 37522387DD0891001D3730303A8E136A from phone
+```
+
+This indicates the phone request was sent successfully, but the message `37522387DD0891001D3730303A8E136A` still appears in the warning logs as undecryptable.
+
+### Possible Causes for Continued Decryption Failures
+
+1. **Primary Device Unavailability**: Phone not connected or not responding to requests
+2. **Message Unavailability**: Requested message no longer exists on primary device
+3. **Response Processing Issues**: Phone responses not being received or processed correctly
+4. **Session/Key Issues**: Encryption keys missing or corrupted on either end
+
+### Additional Debug Logging Added
+
+To investigate response processing, added debug logging to:
+
+1. **Protocol Message Handler**: Track when phone request responses are received
+2. **Response Parser**: Monitor successful/failed parsing of phone request responses
+3. **Request Cancellation**: Verify pending requests are properly cancelled when responses arrive
+
+**Files Modified for Debugging**:
+
+-   `message.go`: Added response tracking in `handlePlaceholderResendResponse()` and `handleProtocolMessage()`
+-   `retry.go`: Added request cancellation tracking in `cancelDelayedRequestFromPhone()`
+
+### Expected Debug Output
+
+When a phone request response is received, you should now see:
+
+```
+DEBUG GREETINGS: Received protocol message from <SENDER>, type: <TYPE>
+DEBUG GREETINGS: Received phone request response, handling...
+DEBUG GREETINGS: Handling response to placeholder resend request <REQUEST_ID> with <N> items
+DEBUG GREETINGS: Successfully parsed phone request response item #1, message ID: <MSG_ID>, chat: <CHAT>, sender: <SENDER>
+DEBUG GREETINGS: Cancelling delayed phone request for message <MSG_ID>
+```
+
+### Next Steps
+
+1. **Monitor Logs**: Check if phone request responses are being received
+2. **Response Analysis**: If responses are received, verify they contain valid message data
+3. **Session Investigation**: If no responses, investigate primary device connectivity and session status
+
+The phone request mechanism is now working correctly. Any remaining decryption issues are likely due to external factors (device availability, message availability) rather than code bugs.

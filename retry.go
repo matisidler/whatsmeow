@@ -328,7 +328,10 @@ func (cli *Client) cancelDelayedRequestFromPhone(msgID types.MessageID) {
 	cli.pendingPhoneRerequestsLock.RLock()
 	cancelPendingRequest, ok := cli.pendingPhoneRerequests[msgID]
 	if ok {
+		fmt.Printf("DEBUG GREETINGS: Cancelling delayed phone request for message %s\n", msgID)
 		cancelPendingRequest()
+	} else {
+		fmt.Printf("DEBUG GREETINGS: No pending phone request found to cancel for message %s\n", msgID)
 	}
 	cli.pendingPhoneRerequestsLock.RUnlock()
 }

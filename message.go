@@ -734,16 +734,21 @@ func (cli *Client) handleAppStateSyncKeyShare(ctx context.Context, keys *waE2E.A
 func (cli *Client) handlePlaceholderResendResponse(msg *waE2E.PeerDataOperationRequestResponseMessage) {
 	reqID := msg.GetStanzaID()
 	parts := msg.GetPeerDataOperationResult()
+	fmt.Printf("DEBUG GREETINGS: Handling response to placeholder resend request %s with %d items\n", reqID, len(parts))
 	cli.Log.Debugf("Handling response to placeholder resend request %s with %d items", reqID, len(parts))
 	for i, part := range parts {
 		var webMsg waWeb.WebMessageInfo
 		if resp := part.GetPlaceholderMessageResendResponse(); resp == nil {
+			fmt.Printf("DEBUG GREETINGS: Missing response in item #%d of response to %s\n", i+1, reqID)
 			cli.Log.Warnf("Missing response in item #%d of response to %s", i+1, reqID)
 		} else if err := proto.Unmarshal(resp.GetWebMessageInfoBytes(), &webMsg); err != nil {
+			fmt.Printf("DEBUG GREETINGS: Failed to unmarshal protobuf web message in item #%d of response to %s: %v\n", i+1, reqID, err)
 			cli.Log.Warnf("Failed to unmarshal protobuf web message in item #%d of response to %s: %v", i+1, reqID, err)
 		} else if msgEvt, err := cli.ParseWebMessage(types.EmptyJID, &webMsg); err != nil {
+			fmt.Printf("DEBUG GREETINGS: Failed to parse web message info in item #%d of response to %s: %v\n", i+1, reqID, err)
 			cli.Log.Warnf("Failed to parse web message info in item #%d of response to %s: %v", i+1, reqID, err)
 		} else {
+			fmt.Printf("DEBUG GREETINGS: Successfully parsed phone request response item #%d, message ID: %s, chat: %s, sender: %s\n", i+1, msgEvt.Info.ID, msgEvt.Info.Chat, msgEvt.Info.Sender)
 			msgEvt.UnavailableRequestID = reqID
 			cli.dispatchEvent(msgEvt)
 		}
@@ -752,6 +757,7 @@ func (cli *Client) handlePlaceholderResendResponse(msg *waE2E.PeerDataOperationR
 
 func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.MessageInfo, msg *waE2E.Message) {
 	protoMsg := msg.GetProtocolMessage()
+	fmt.Printf("DEBUG GREETINGS: Received protocol message from %s, type: %v\n", info.Sender, protoMsg.GetType())
 
 	if protoMsg.GetHistorySyncNotification() != nil && info.IsFromMe {
 		if !cli.ManualHistorySyncDownload {
@@ -764,6 +770,7 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 	}
 
 	if protoMsg.GetPeerDataOperationRequestResponseMessage().GetPeerDataOperationRequestType() == waE2E.PeerDataOperationRequestType_PLACEHOLDER_MESSAGE_RESEND {
+		fmt.Printf("DEBUG GREETINGS: Received phone request response, handling...\n")
 		go cli.handlePlaceholderResendResponse(protoMsg.GetPeerDataOperationRequestResponseMessage())
 	}
 
