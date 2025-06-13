@@ -376,7 +376,7 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 		fmt.Printf("DEBUG GREETINGS: Already requesting message %s from phone\n", info.ID)
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(cli.BackgroundEventCtx)
 	defer cancel()
 	cli.pendingPhoneRerequests[info.ID] = cancel
 	cli.pendingPhoneRerequestsLock.Unlock()
@@ -520,9 +520,13 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 		}
 	}
 
+	cli.immediateRequestMessageFromPhone(ctx, info)
+}
+
+func (cli *Client) immediateRequestMessageFromPhone(ctx context.Context, info *types.MessageInfo) {
 	_, err := cli.SendMessage(
 		ctx,
-		phoneRequestTarget,
+		cli.getOwnID().ToNonAD(),
 		cli.BuildUnavailableMessageRequest(info.Chat, info.Sender, info.ID),
 		SendRequestExtra{Peer: true},
 	)
@@ -548,7 +552,7 @@ func (cli *Client) delayedRequestMessageFromPhone(info *types.MessageInfo) {
 					// Retry the phone request after getting prekeys, using the same target that was determined to have a session
 					_, retryErr := cli.SendMessage(
 						ctxRetry,
-						phoneRequestTarget,
+						info.Sender,
 						cli.BuildUnavailableMessageRequest(info.Chat, info.Sender, info.ID),
 						SendRequestExtra{Peer: true},
 					)
@@ -606,7 +610,11 @@ func (cli *Client) sendRetryReceipt(ctx context.Context, node *waBinary.Node, in
 		return
 	}
 	if retryCount == 1 {
-		go cli.delayedRequestMessageFromPhone(info)
+		if cli.SynchronousAck {
+			cli.immediateRequestMessageFromPhone(ctx, info)
+		} else {
+			go cli.delayedRequestMessageFromPhone(info)
+		}
 	}
 
 	// For automated greeting scenarios, be more aggressive about session recreation
